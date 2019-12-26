@@ -5,7 +5,7 @@ const contrib = require('blessed-contrib');
 const request = require('request-promise');
 const moment = require('moment');
 const screen = blessed.screen();
-const grid = new contrib.grid({rows: 1, cols: 1, screen});
+const grid = new contrib.grid({rows: 2, cols: 1, screen});
 const line = grid.set(0, 0, 1, 1, contrib.line,
     {style:
       {line: 'yellow',
@@ -15,48 +15,70 @@ const line = grid.set(0, 0, 1, 1, contrib.line,
     xPadding: 1,
     wholeNumbersOnly: false,
     showLegend: true,
-    label: 'Bitcoin price USD - Powered by CoinDesk'});
+    label: 'Bitcoin price USD - Powered by Coincap'});
+const othersLine = grid.set(1, 0, 1, 1, contrib.line,
+    {style:
+      {line: 'yellow',
+          text: 'green',
+          baseline: 'white'},
+    xLabelPadding: 1,
+    xPadding: 1,
+    wholeNumbersOnly: false,
+    showLegend: true,
+    label: 'Crypto price'});
 screen.render();
 let running = false;
-const getPrice = async() => {
-    const current = await request({uri: 'https://api.coindesk.com/v1/bpi/currentprice.json', json:true});
-    const latestValue = current.bpi.USD.rate;
-    const history = await request({uri:'https://api.coindesk.com/v1/bpi/historical/close.json', json:true});
-    const values = history.bpi;
-    values[moment().format('YYYY-MM-DD')] = Number(latestValue.replace(',', ''));
-    return values;
-};
-const formatData = (data) => {
+function randomColor() {
+    return [Math.random() * 255, Math.random() * 255, Math.random() * 255];
+}
+const formatData = (coin, data) => {
     const resp = {
-        label: 'Bitcoin price USD - Powered by CoinDesk',
-        title: 'Bitcoin price USD - Powered by CoinDesk',
+        title: coin,
         x:[],
-        y:[]
+        y:[],
+        style:{
+            line: randomColor()
+        }
     };
-    const sortedKeys = Object.keys(data).sort(function(a, b) {
-        if (a > b) {
+    const sortedData = data.sort(function(a, b) {
+        if (a.time > b.time) {
             return 1;
         }
-        if (b > a) {
+        if (b.time > a.time) {
             return -1;
         }
         return 0;
     });
-    sortedKeys.forEach((key) => {
-        resp.x.push(key.substr(5));
-        resp.y.push(data[key]);
+    sortedData.forEach((elm) => {
+        resp.x.push(moment(elm.time).format('MM-DD'));
+        resp.y.push(Number(elm.priceUsd));
     });
     return resp;
 };
+const getPrice = async(coin) => {
+    const now = moment().unix() * 1000;
+    const startTime = moment().subtract(2, 'month').unix() * 1000;
+    const baseUrl = `https://api.coincap.io/v2/assets/${coin}`;
+    const url = `${baseUrl}/history?interval=d1&start=${startTime}&end=${now}`;
+    const history = await request({uri:url, json:true});
+    const response = [...history.data];
+    const current = await request({uri:baseUrl, json:true});
+    response.push({time: now, priceUsd: current.data.priceUsd});
+    return formatData(coin, response);
+};
+
 const updatePrice = () => {
     if(running) {
         return;
     }
     running = true;
-    getPrice()
-        .then((resp) => formatData(resp))
+    getPrice('bitcoin')
         .then((formatedData) => {
-            line.setData([formatedData]);
+            line.setData(formatedData);
+            return Promise.all([getPrice('ethereum'), getPrice('monero')]);
+        })
+        .then((formatedData) => {
+            othersLine.setData(formatedData);
             screen.render();
             running = false;
         })
@@ -65,10 +87,10 @@ const updatePrice = () => {
             console.error('Error: ', err);
         });
 };
-
+updatePrice();
 let interval = setInterval(() => {
     updatePrice();
-}, 1000);
+}, 1000 * 60);
 
 screen.key(['escape', 'q', 'C-c'], function() {
     clearInterval(interval);
@@ -77,4 +99,5 @@ screen.key(['escape', 'q', 'C-c'], function() {
 
 screen.on('resize', () => {
     line.emit('attach');
+    othersLine.emit('attach');
 });
